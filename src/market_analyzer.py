@@ -121,17 +121,14 @@ class MarketAnalyzer:
         self.search_service = search_service
         self.analyzer = analyzer
         self.data_manager = DataFetcherManager()
-        self.region = region if region in ("cn", "us") else "cn"
+        self.region = region if region in ("cn", "hk", "us") else "cn"
         self.profile: MarketProfile = get_profile(self.region)
         self.strategy = get_market_strategy_blueprint(self.region)
 
     def _get_review_language(self) -> str:
-        configured = normalize_report_language(
+        return normalize_report_language(
             getattr(getattr(self, "config", None), "report_language", "zh")
         )
-        if self.region == "us":
-            return "en"
-        return configured
 
     def _get_template_review_language(self) -> str:
         return normalize_report_language(
@@ -141,7 +138,9 @@ class MarketAnalyzer:
     def _get_market_scope_name(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
         if self.region == "us":
-            return "US market"
+            return "US market" if review_language == "en" else "美股市场"
+        if self.region == "hk":
+            return "Hong Kong market" if review_language == "en" else "港股市场"
         if review_language == "en":
             return "A-share market"
         return "A股市场"
@@ -150,13 +149,15 @@ class MarketAnalyzer:
         """Return the turnover unit label for the current market/language."""
         if self.region == "us":
             return "USD bn" if self._get_review_language() == "en" else "十亿美元"
+        if self.region == "hk":
+            return "HKD bn" if self._get_review_language() == "en" else "十亿港元"
         return "CNY 100m" if self._get_review_language() == "en" else "亿"
 
     def _format_turnover_value(self, amount_raw: float) -> str:
         """Format raw turnover according to market-specific units."""
         if amount_raw == 0.0:
             return "N/A"
-        if self.region == "us":
+        if self.region in {"us", "hk"}:
             return f"{amount_raw / 1e9:.2f}"
         if amount_raw > 1e6:
             return f"{amount_raw / 1e8:.0f}"
@@ -164,18 +165,85 @@ class MarketAnalyzer:
 
     def _get_review_title(self, date: str) -> str:
         if self._get_review_language() == "en":
-            market_name = "US Market Recap" if self.region == "us" else "A-share Market Recap"
+            if self.region == "us":
+                market_name = "US Market Recap"
+            elif self.region == "hk":
+                market_name = "Hong Kong Market Recap"
+            else:
+                market_name = "A-share Market Recap"
             return f"## {date} {market_name}"
+        if self.region == "us":
+            return f"## {date} 美股大盘复盘"
+        if self.region == "hk":
+            return f"## {date} 港股大盘复盘"
         return f"## {date} 大盘复盘"
 
     def _get_index_hint(self) -> str:
         if self._get_review_language() == "en":
             if self.region == "us":
                 return "Analyze the key moves in the S&P 500, Nasdaq, Dow, and other major indices."
+            if self.region == "hk":
+                return "Analyze the key moves in the Hang Seng Index, HSCEI, and other major Hong Kong indices."
             return "Analyze the price action in the SSE, SZSE, ChiNext, and other major indices."
+        if self.region == "hk":
+            return "分析恒生指数、国企指数等港股核心指数的走势特征"
         return self.profile.prompt_index_hint
 
     def _get_strategy_prompt_block(self) -> str:
+        if self.region == "hk":
+            if self._get_review_language() == "en":
+                return """## Strategy Blueprint: Hong Kong Market Regime Strategy
+Focus on index trend, offshore China sentiment, and sector leadership to shape the next-session plan.
+
+### Strategy Principles
+- Read Hang Seng / HSCEI direction first, then assess liquidity and sector breadth.
+- Separate broad index beta from catalyst-driven leadership in internet, financials, and property.
+- Translate the recap into explicit risk-on / neutral / defensive positioning guidance.
+
+### Analysis Dimensions
+- Trend Structure: Determine whether the market is breaking out, consolidating, or weakening.
+  - Are HSI and HSCEI aligned
+  - Did turnover confirm the move
+  - Are key support or resistance levels reclaimed or lost
+- Liquidity & Sentiment: Identify risk appetite and participation quality.
+  - Whether turnover expands or contracts
+  - Whether offshore China sentiment is improving
+  - Whether leadership is broad or concentrated
+- Sector Themes: Distill tradable leaders and vulnerable laggards.
+  - Internet / platform economy trend
+  - Financials / property sensitivity to macro or policy
+  - China proxy / offshore sentiment shifts
+
+### Action Framework
+- Offensive: indices rise with stronger breadth and expanding turnover.
+- Balanced: mixed index signals or range trading; control size and wait for confirmation.
+- Defensive: indices weaken with broad underperformance; prioritize risk control."""
+            return """## 策略框架：港股市场复盘策略
+聚焦恒生指数、离岸中国情绪与板块主线，为下一交易日制定计划。
+
+### 策略原则
+- 先看恒指与国企指数方向，再看量能与板块扩散。
+- 区分指数贝塔行情与事件驱动主线。
+- 把复盘结论落到进攻 / 均衡 / 防守的仓位建议。
+
+### 分析维度
+- 趋势结构：判断港股处于突破、震荡还是走弱阶段。
+  - 恒指与国企指数是否同向
+  - 成交额是否验证走势
+  - 关键支撑或阻力是否被突破
+- 流动性与情绪：识别风险偏好和参与质量。
+  - 成交额是放大还是缩小
+  - 离岸中国情绪是否改善
+  - 领涨是扩散还是集中
+- 主线板块：提炼可交易主线与风险板块。
+  - 互联网平台与科技主线
+  - 金融、地产对宏观/政策的敏感性
+  - 中概与离岸情绪变化
+
+### 行动框架
+- 进攻：指数共振上行、量能放大、主线强化。
+- 均衡：信号分化或低波动震荡，控制仓位等待确认。
+- 防守：指数走弱且弱势扩散，优先风控。"""
         if not (self.region == "cn" and self._get_review_language() == "en"):
             return self.strategy.to_prompt_block()
         return """## Strategy Blueprint: A-share Three-Phase Recap Strategy
@@ -207,6 +275,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     def _get_strategy_markdown_block(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
+        if self.region == "hk":
+            if review_language == "en":
+                return """### 6. Strategy Framework
+- **Trend Structure**: Track HSI / HSCEI direction, confirmation, and key levels.
+- **Liquidity & Sentiment**: Focus on turnover, breadth, and offshore China sentiment.
+- **Sector Themes**: Watch internet, financials, property, and offshore China proxies."""
+            return """### 六、策略框架
+- **趋势结构**：跟踪恒指 / 国企指数方向、量能确认与关键位置。
+- **流动性与情绪**：关注成交额、参与广度与离岸中国情绪。
+- **主线板块**：重点观察互联网、金融、地产与中概映射。"""
         if not (self.region == "cn" and review_language == "en"):
             return self.strategy.to_markdown_block()
         return """### 6. Strategy Framework
@@ -379,8 +457,13 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         try:
             logger.info("[大盘] 开始搜索市场新闻...")
             
-            # 根据 region 设置搜索上下文名称，避免美股搜索被解读为 A 股语境
-            market_name = "大盘" if self.region == "cn" else "US market"
+            # 根据 region 设置搜索上下文名称，避免被解读为其他市场语境
+            if self.region == "cn":
+                market_name = "大盘"
+            elif self.region == "hk":
+                market_name = "Hong Kong market" if self._get_review_language() == "en" else "港股市场"
+            else:
+                market_name = "US market" if self._get_review_language() == "en" else "美股市场"
             for query in search_queries:
                 response = self.search_service.search_stock_news(
                     stock_code="market",
@@ -590,7 +673,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 Leading: {top_sectors_text if top_sectors_text else "N/A"}
 Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
             else:
-                sector_block = "## Sector Performance\n(US sector data not available.)"
+                market_label = "US" if self.region == "us" else "Hong Kong"
+                sector_block = f"## Sector Performance\n({market_label} sector data not available.)"
         else:
             if self.profile.has_market_stats:
                 stats_block = f"""## 市场概况
@@ -605,7 +689,8 @@ Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
 领涨: {top_sectors_text if top_sectors_text else "暂无数据"}
 领跌: {bottom_sectors_text if bottom_sectors_text else "暂无数据"}"""
             else:
-                sector_block = "## 板块表现\n（美股暂无板块涨跌数据）"
+                market_label = "美股" if self.region == "us" else "港股"
+                sector_block = f"## 板块表现\n（{market_label}暂无板块涨跌数据）"
 
         data_no_indices_hint = (
             "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"

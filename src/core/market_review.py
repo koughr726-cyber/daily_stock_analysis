@@ -32,16 +32,45 @@ def _get_market_review_text(language: str) -> dict[str, str]:
             "root_title": "# 🎯 Market Review",
             "push_title": "🎯 Market Review",
             "cn_title": "# A-share Market Recap",
+            "hk_title": "# Hong Kong Market Recap",
             "us_title": "# US Market Recap",
-            "separator": "> US market recap follows",
+            "separators": {
+                "hk": "> Hong Kong market recap follows",
+                "us": "> US market recap follows",
+            },
         }
     return {
         "root_title": "# 🎯 大盘复盘",
         "push_title": "🎯 大盘复盘",
         "cn_title": "# A股大盘复盘",
+        "hk_title": "# 港股大盘复盘",
         "us_title": "# 美股大盘复盘",
-        "separator": "> 以下为美股大盘复盘",
+        "separators": {
+            "hk": "> 以下为港股大盘复盘",
+            "us": "> 以下为美股大盘复盘",
+        },
     }
+
+
+def _resolve_review_regions(region: str) -> list[str]:
+    normalized = (region or "cn").strip().lower()
+    alias_map = {
+        "cn": ["cn"],
+        "hk": ["hk"],
+        "us": ["us"],
+        "both": ["cn", "us"],
+        "all": ["cn", "hk", "us"],
+    }
+    if normalized in alias_map:
+        return alias_map[normalized]
+
+    parts = [part.strip().lower() for part in normalized.split(",") if part.strip()]
+    allowed = {"cn", "hk", "us"}
+    ordered: list[str] = []
+    for part in parts:
+        if part in allowed and part not in ordered:
+            ordered.append(part)
+    return ordered or ["cn"]
 
 
 def run_market_review(
@@ -74,38 +103,35 @@ def run_market_review(
         if override_region is not None
         else (getattr(config, 'market_review_region', 'cn') or 'cn')
     )
-    if region not in ('cn', 'us', 'both'):
-        region = 'cn'
+    regions = _resolve_review_regions(region)
 
     try:
-        if region == 'both':
-            # 顺序执行 A 股 + 美股，合并报告
-            cn_analyzer = MarketAnalyzer(
-                search_service=search_service, analyzer=analyzer, region='cn'
-            )
-            us_analyzer = MarketAnalyzer(
-                search_service=search_service, analyzer=analyzer, region='us'
-            )
-            logger.info("生成 A 股大盘复盘报告...")
-            cn_report = cn_analyzer.run_daily_review()
-            logger.info("生成美股大盘复盘报告...")
-            us_report = us_analyzer.run_daily_review()
-            review_report = ''
-            if cn_report:
-                review_report = f"{review_text['cn_title']}\n\n{cn_report}"
-            if us_report:
-                if review_report:
-                    review_report += f"\n\n---\n\n{review_text['separator']}\n\n"
-                review_report += f"{review_text['us_title']}\n\n{us_report}"
-            if not review_report:
-                review_report = None
-        else:
+        title_map = {
+            "cn": review_text["cn_title"],
+            "hk": review_text["hk_title"],
+            "us": review_text["us_title"],
+        }
+        review_parts: list[str] = []
+        for current_region in regions:
             market_analyzer = MarketAnalyzer(
                 search_service=search_service,
                 analyzer=analyzer,
-                region=region,
+                region=current_region,
             )
-            review_report = market_analyzer.run_daily_review()
+            logger.info("生成 %s 大盘复盘报告...", current_region.upper())
+            current_report = market_analyzer.run_daily_review()
+            if not current_report:
+                continue
+
+            if review_parts:
+                separator = review_text["separators"].get(
+                    current_region,
+                    review_text["separators"]["us"],
+                )
+                review_parts.append(separator)
+            review_parts.append(f"{title_map[current_region]}\n\n{current_report}")
+
+        review_report = "\n\n---\n\n".join(review_parts) if review_parts else None
         
         if review_report:
             # 保存报告到文件

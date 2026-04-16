@@ -193,26 +193,36 @@ def compute_effective_region(
     Compute effective market review region given config and open markets.
 
     Args:
-        config_region: From MARKET_REVIEW_REGION ('cn' | 'us' | 'both')
+        config_region: From MARKET_REVIEW_REGION ('cn' | 'hk' | 'us' | 'both' | 'all')
         open_markets: Markets open today
 
     Returns:
         None: caller uses config default (check disabled)
         '': all relevant markets closed, skip market review
-        'cn' | 'us' | 'both': effective subset for today
+        '': all relevant markets closed
+        'cn' | 'hk' | 'us' | 'both' | 'all' | comma-joined subset
     """
-    if config_region not in ("cn", "us", "both"):
-        config_region = "cn"
-    if config_region == "cn":
-        return "cn" if "cn" in open_markets else ""
-    if config_region == "us":
-        return "us" if "us" in open_markets else ""
-    # both
-    parts = []
-    if "cn" in open_markets:
-        parts.append("cn")
-    if "us" in open_markets:
-        parts.append("us")
+    normalized = (config_region or "cn").strip().lower()
+    preset_map = {
+        "cn": ["cn"],
+        "hk": ["hk"],
+        "us": ["us"],
+        "both": ["cn", "us"],
+        "all": ["cn", "hk", "us"],
+    }
+    requested = preset_map.get(
+        normalized,
+        [part for part in normalized.split(",") if part in {"cn", "hk", "us"}],
+    )
+    if not requested:
+        requested = ["cn"]
+
+    parts = [market for market in requested if market in open_markets]
     if not parts:
         return ""
-    return "both" if len(parts) == 2 else parts[0]
+
+    if parts == ["cn", "us"]:
+        return "both"
+    if parts == ["cn", "hk", "us"]:
+        return "all"
+    return ",".join(parts) if len(parts) > 1 else parts[0]
